@@ -32,9 +32,11 @@ jobs:
           python-version: '3.11'
 
       - name: Abhaengigkeiten installieren
-        run: pip install feedparser requests
+        run: pip install feedparser requests openai
 
       - name: Nachrichten aktualisieren
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python collect.py
 
       - name: Pages vorbereiten
