@@ -1,4 +1,3 @@
-
 name: Daily Intelligence Monitor
 
 on:
@@ -32,11 +31,12 @@ jobs:
           python-version: '3.11'
 
       - name: Abhaengigkeiten installieren
-        run: pip install feedparser requests openai
+        run: pip install feedparser requests google-genai pydantic
 
-      - name: Nachrichten aktualisieren
+      - name: Nachrichten und Psychologieartikel aktualisieren
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.8-flash
         run: python collect.py
 
       - name: Pages vorbereiten
@@ -50,4 +50,3 @@ jobs:
       - name: Website veroeffentlichen
         id: deployment
         uses: actions/deploy-pages@v4
-
