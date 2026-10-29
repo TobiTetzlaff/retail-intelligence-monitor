@@ -7,13 +7,21 @@ on:
     - cron: '30 6 * * *'
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
+
+concurrency:
+  group: retail-intelligence-pages
+  cancel-in-progress: false
 
 jobs:
   update:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,18 +37,6 @@ jobs:
       - name: Nachrichten aktualisieren
         run: python collect.py
 
-      - name: Aenderungen speichern
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git reset --soft origin/main
-          git add site/
-          if ! git diff --cached --quiet; then
-            git commit -m "Update Intelligence Monitor"
-            git push origin HEAD:main
-          fi
-
       - name: Pages vorbereiten
         uses: actions/configure-pages@v5
 
@@ -50,4 +46,6 @@ jobs:
           path: site
 
       - name: Website veroeffentlichen
+        id: deployment
         uses: actions/deploy-pages@v4
+
