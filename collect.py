@@ -11,7 +11,16 @@ SOURCES={
 'tech':['heise online','THE DECODER','MIT Technology Review','t3n','TechCrunch','Golem','Handelsblatt KI','VentureBeat','AI News','Nature Machine Intelligence']}
 QUERIES={
 'handel':['Einzelhandel Deutschland Strategie Unternehmen','Lebensmittelhandel E-Commerce Logistik Handel Deutschland','Retail Innovation Filialen Omnichannel Deutschland'],
-'konsum':['Konsumklima Verbrauchervertrauen Deutschland Studie','Konsumverhalten Verbrauchertrends Europa Deutschland','Kaufverhalten Preisbewusstsein Haushalte Deutschland'],
+'konsum':[   'Konsumverhalten Kaufentscheidungen Verbraucher Studie Deutschland',
+    'Shopper Insights Kaufverhalten Handel Studie',
+    'Markenbindung Markenwechsel Handelsmarken Konsumenten Studie',
+    'Preiswahrnehmung Zahlungsbereitschaft Konsumpsychologie Studie',
+    'Nachhaltigkeit Werte Einstellungen Konsum Forschung',
+    'Customer Experience Einkaufsverhalten Verbraucherbefragung',
+    'Konsumklima Verbrauchervertrauen Kaufkraft Deutschland',
+    'Consumer Behavior Retail Research Europe',
+    'Social Commerce KI Kaufberatung Technologieakzeptanz Studie',
+    'Verhaltensökonomie Kaufentscheidung Konsum Experiment'],
 'tech':['künstliche Intelligenz Unternehmen Agenten Automatisierung','AI technology innovation enterprise applications','KI Handel Robotik Digitalisierung Technologie']}
 KEYWORDS={
 'handel':['handel','retail','supermarkt','filial','e-commerce','onlinehandel','discounter','logistik','lieferkette','rewe','aldi','lidl','kaufland','edeka','otto','amazon','shop','lebensmittel'],
