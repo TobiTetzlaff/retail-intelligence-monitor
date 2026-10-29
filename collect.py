@@ -162,55 +162,106 @@ def lead(items):
 
 
 def psychology():
+    '''Create one article; never block the news website if Gemini is unavailable.'''
+    run_number = int(os.getenv('GITHUB_RUN_NUMBER', '1'))
+    topic = TOPICS[(run_number - 1) % len(TOPICS)]
+    previous_file = ROOT / 'site' / 'data.json'
+
+    def fallback():
+        # Prefer the last published article if it exists in the checkout.
+        if previous_file.exists():
+            try:
+                previous = json.loads(previous_file.read_text(encoding='utf-8')).get('psychology')
+                if isinstance(previous, dict) and previous.get('sentences') and previous.get('reference'):
+                    print('Gemini nicht erreichbar: bisherigen Psychologieartikel beibehalten.')
+                    return previous
+            except (OSError, ValueError, TypeError):
+                pass
+        # A verified, prewritten fallback if no previous article is available.
+        print('Gemini nicht erreichbar: wissenschaftlichen Reserveartikel verwenden.')
+        return {
+            'title': 'Warum Verluste unsere Kaufentscheidungen beeinflussen',
+            'theories': ['Prospect Theory'],
+            'reference': [{'label': 'Kahneman & Tversky (1979), Econometrica', 'url': 'https://doi.org/10.2307/1914185'}],
+            'sentences': [
+                'Menschen beurteilen wirtschaftliche Entscheidungen häufig relativ zu einem Referenzpunkt.',
+                'Die Prospect Theory beschreibt, wie Gewinne und Verluste im Verhältnis zu diesem Bezugspunkt wahrgenommen werden.',
+                'Verluste können psychologisch stärker wirken als gleich hohe Gewinne.',
+                'Dieser Effekt wird als Verlustaversion bezeichnet.',
+                'Ein Referenzpunkt kann sich aus Erwartungen, bisherigen Preisen oder dem aktuellen Besitz ergeben.',
+                'Deshalb kann dieselbe Preisänderung je nach Ausgangslage unterschiedlich bewertet werden.',
+                'Die Theorie hilft dabei, scheinbar widersprüchliche Entscheidungen unter Unsicherheit zu verstehen.',
+                'Sie bedeutet jedoch nicht, dass alle Menschen in jeder Situation gleich reagieren.',
+                'Erfahrung, Kontext und die konkrete Darstellung einer Entscheidung können die Wirkung verändern.',
+                'Im Handel lassen sich solche Mechanismen mit kontrollierten Preisexperimenten untersuchen.'
+            ],
+            'example': [
+                'Ein Kunde sieht einen Artikel zunächst für achtzig Euro.',
+                'Während einer Aktion kostet derselbe Artikel sechzig Euro.',
+                'Wenn der Preis wieder steigt, kann der Kunde dies als Verlust einer Vergünstigung erleben.'
+            ],
+            'generated': False
+        }
+
     api_key = os.getenv('GEMINI_API_KEY', '').strip()
     if not api_key:
-        raise RuntimeError('GEMINI_API_KEY fehlt. Bitte unter GitHub Settings > Secrets and variables > Actions hinterlegen.')
-    from google import genai
-    from google.genai import types
-    from pydantic import BaseModel, Field
+        print('WARNUNG: GEMINI_API_KEY fehlt; verwende Reserveartikel.')
+        return fallback()
 
-    class Article(BaseModel):
-        title: str
-        sentences: list[str] = Field(min_length=10, max_length=10)
-        example: list[str] = Field(min_length=3, max_length=3)
-
-    # Run number changes on every newly started workflow; run attempt changes on rerun.
-    run_number = int(os.getenv('GITHUB_RUN_NUMBER', '1'))
-    run_attempt = int(os.getenv('GITHUB_RUN_ATTEMPT', '1'))
-    topic = TOPICS[(run_number + run_attempt - 2) % len(TOPICS)]
-    prompt = f'''Verfasse auf Deutsch einen neuen wissenschaftlich informierten Kurzbeitrag zum Thema: {topic['title']}.
-Theoretischer Rahmen: {', '.join(topic['theories'])}.
-Zulässige Literaturgrundlage (nur diese Literatur, keine weiteren Studien erfinden): {json.dumps(topic['reference'], ensure_ascii=False)}.
-Verbindliche Anforderungen:
-- Genau 10 eigenständige, grammatikalisch vollständige Sätze im Array "sentences"; zusammen ergeben sie einen gut lesbaren Fließtext ohne Nummerierung.
-- Genau 3 weitere vollständige Sätze im Array "example", die ein konkretes, realistisches Beispiel aus dem Handel oder Konsumalltag darstellen.
-- Prägnante wissenschaftlich korrekte Überschrift im Feld "title".
-- Erläutere Mechanismus, theoretischen Kontext, empirische Einordnung und Grenzen der Übertragbarkeit; keine unbelegten Zahlen, keine erfundenen Experimente oder Zitate.
-- Kein Markdown, keine Aufzählungszeichen, keine Quellenangaben im Fließtext.
-- Ein Satz pro Array-Element, keine Abkürzungen mit Punkten, die die Satzprüfung erschweren.
-- Schreibe eigenständig, nicht als wörtliche Wiedergabe der Quelle.
-Variiere den konkreten Blickwinkel gegenüber anderen Durchläufen. Laufkennung: {run_number}-{run_attempt}.
-'''
-    client = genai.Client(api_key=api_key)
     try:
-        last_error = None
-        for attempt in range(2):
-            response = client.models.generate_content(
-                model=os.getenv('GEMINI_MODEL', 'gemini-3.8-flash'),
-                contents=prompt + ('\nWICHTIG: Prüfe diesmal vor der Ausgabe die exakte Satzanzahl und vermeide mehrteilige Sätze je Element.' if attempt else ''),
-                config=types.GenerateContentConfig(response_mime_type='application/json', response_schema=Article, temperature=0.65),
-            )
-            try:
-                article = Article.model_validate_json(response.text)
-                if all(len(re.findall(r'[.!?]', text)) == 1 and text.strip()[-1] in '.!?' for text in article.sentences + article.example):
-                    return {'title': article.title, 'theories': topic['theories'], 'reference': topic['reference'], 'sentences': article.sentences, 'example': article.example, 'generated': True}
-                last_error = 'Satzanzahl pro Element nicht korrekt'
-            except Exception as exc:
-                last_error = str(exc)
-        raise RuntimeError('Gemini lieferte nach zwei Versuchen keinen gültigen 10+3-Artikel: ' + str(last_error))
-    finally:
-        client.close()
+        from google import genai
+        from google.genai import types
+        from pydantic import BaseModel, Field
 
+        class Article(BaseModel):
+            title: str
+            sentences: list[str] = Field(min_length=10, max_length=10)
+            example: list[str] = Field(min_length=3, max_length=3)
+
+        prompt = f'''Verfasse auf Deutsch einen neuen wissenschaftlich informierten Kurzbeitrag zum Thema: {topic['title']}.
+Theoretischer Rahmen: {', '.join(topic['theories'])}.
+Zulässige Literaturgrundlage (keine zusätzlichen Quellen erfinden): {json.dumps(topic['reference'], ensure_ascii=False)}.
+Gib genau 10 vollständige Sätze im JSON-Array sentences und genau 3 vollständige Sätze
+als realistisches Beispiel aus dem Handel oder Konsumalltag im JSON-Array example aus.
+Ergänze eine prägnante Überschrift im Feld title. Keine erfundenen Befunde, Zitate oder Zahlen.
+Ein Satz pro Array-Element, ohne Markdown. Die Sätze werden als Fließtext angezeigt.
+Schreibe eigenständig, erläutere Theorie, Wirkmechanismus, Anwendungsgrenzen und mögliche Effekte.
+Neue Perspektive für Workflow-Lauf {run_number}.
+'''
+        client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=30000))
+        try:
+            for attempt in range(3):
+                try:
+                    response = client.models.generate_content(
+                        model=os.getenv('GEMINI_MODEL', 'gemini-2.5-flash-lite'),
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type='application/json',
+                            response_schema=Article,
+                            temperature=0.6,
+                        ),
+                    )
+                    article = Article.model_validate_json(response.text)
+                    if not all(len(re.findall(r'[.!?]', sentence)) == 1 and sentence.strip().endswith(('.', '!', '?')) for sentence in article.sentences + article.example):
+                        raise ValueError('Antwort enthaelt nicht genau einen Satz pro Element')
+                    print('Psychologieartikel erfolgreich mit Gemini generiert.')
+                    return {
+                        'title': article.title,
+                        'theories': topic['theories'],
+                        'reference': topic['reference'],
+                        'sentences': article.sentences,
+                        'example': article.example,
+                        'generated': True,
+                    }
+                except Exception as exc:
+                    print(f'Gemini-Versuch {attempt + 1}/3 fehlgeschlagen: {type(exc).__name__}: {str(exc)[:180]}')
+                    if attempt < 2:
+                        time.sleep(3 * (attempt + 1))
+        finally:
+            client.close()
+    except Exception as exc:
+        print(f'Gemini momentan nicht nutzbar: {type(exc).__name__}: {str(exc)[:180]}')
+    return fallback()
 
 def main():
     data = {'updated_at': NOW.isoformat(), 'window_start': START.isoformat(), 'categories': {}, 'methodology': 'RSS-Recherche mit heuristischem Ranking und 7-Tage-Fenster. Konsumstudien werden über Signalwörter priorisiert, nicht auf Evidenzqualität geprüft. Psychologieartikel werden mit Gemini aus kuratierter Literatur generiert; fachliche Überprüfung vor wissenschaftlicher Weiterverwendung empfohlen.'}
