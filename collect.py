@@ -1,111 +1,229 @@
-import json,re,html,os,time,calendar,datetime,collections,urllib.parse
-from pathlib import Path
-import requests,feedparser
+"""Retail Intelligence Monitor: RSS news and Gemini psychology feature.
+Requires: pip install requests feedparser google-genai pydantic
+"""
+import calendar
+import datetime as dt
+import html
+import json
+import os
+import re
+import time
+import urllib.parse
 from difflib import SequenceMatcher
-NOW=datetime.datetime.now(datetime.timezone.utc)
-START=NOW-datetime.timedelta(days=7)
-ROOT=Path(__file__).parent
-SOURCES={
-'handel':['Lebensmittel Zeitung','Handelsblatt','stores+shops','etailment','Exciting Commerce','TextilWirtschaft','EHI Retail Institute','Supermarktblog','OnlinehändlerNews','Retail News','HDE'],
-'konsum':['NIM Konsumklima','NielsenIQ','Destatis','Eurostat','Ipsos','YouGov','rheingold Institut','IFH Köln','McKinsey Consumer','Eurofound'],
-'tech':['heise online','THE DECODER','MIT Technology Review','t3n','TechCrunch','Golem','Handelsblatt KI','VentureBeat','AI News','Nature Machine Intelligence']}
-QUERIES={
-'handel':['Einzelhandel Deutschland Strategie Unternehmen','Lebensmittelhandel E-Commerce Logistik Handel Deutschland','Retail Innovation Filialen Omnichannel Deutschland'],
-'konsum':[   'Konsumverhalten Kaufentscheidungen Verbraucher Studie Deutschland',
-    'Shopper Insights Kaufverhalten Handel Studie',
-    'Markenbindung Markenwechsel Handelsmarken Konsumenten Studie',
-    'Preiswahrnehmung Zahlungsbereitschaft Konsumpsychologie Studie',
-    'Nachhaltigkeit Werte Einstellungen Konsum Forschung',
-    'Customer Experience Einkaufsverhalten Verbraucherbefragung',
-    'Konsumklima Verbrauchervertrauen Kaufkraft Deutschland',
-    'Consumer Behavior Retail Research Europe',
-    'Social Commerce KI Kaufberatung Technologieakzeptanz Studie',
-    'Verhaltensökonomie Kaufentscheidung Konsum Experiment'],
-'tech':['künstliche Intelligenz Unternehmen Agenten Automatisierung','AI technology innovation enterprise applications','KI Handel Robotik Digitalisierung Technologie']}
-KEYWORDS={
-'handel':['handel','retail','supermarkt','filial','e-commerce','onlinehandel','discounter','logistik','lieferkette','rewe','aldi','lidl','kaufland','edeka','otto','amazon','shop','lebensmittel'],
-'konsum':['konsum','verbrauch','kaufverhalten','kaufkraft','konsumklima','inflation','haushalt','verbraucher','einkauf','preis','studie','umfrage','consumer','shopper','confidence','vertrauen'],
-'tech':['ki','künstliche intelligenz','artificial intelligence','agent','robot','automatisierung','technologie','software','digital','modell','llm','chip','innovation','ai ','machine learning']}
-EXCLUDE=['fußball','bundesliga','promi','horoskop','rezept','sportwetten']
-SESSION=requests.Session();SESSION.headers.update({'User-Agent':'RetailIntelligenceMonitor/1.0 (public RSS aggregation)'})
-def clean(s):
- s=html.unescape(re.sub('<[^>]+>',' ',str(s or '')))
- return re.sub(r'\s+',' ',s).strip()
-def norm(s):
- s=re.sub(r'[^a-z0-9äöüß ]',' ',s.lower());return re.sub(r'\s+',' ',s).strip()
-def fetch(query):
- url='https://news.google.com/rss/search?'+urllib.parse.urlencode({'q':query+' when:7d','hl':'de','gl':'DE','ceid':'DE:de'})
- try:
-  r=SESSION.get(url,timeout=16);r.raise_for_status();return feedparser.parse(r.content).entries[:65]
- except Exception as e:
-  print('Feed error:',query,str(e));return []
-def pubdate(e):
- for field in ('published_parsed','updated_parsed'):
-  if e.get(field):
-   try:return datetime.datetime.fromtimestamp(calendar.timegm(e[field]),datetime.timezone.utc)
-   except Exception:pass
- return None
-def sentences(text,n=2):
- parts=re.split(r'(?<=[.!?])\s+',clean(text));return [p for p in parts if len(p)>25][:n]
-def summarize(item):
- title=item['title'].rstrip('.!?')+'.'
- detail=clean(item.get('description',''))
- parts=sentences(detail,3)
- second=next((s for s in parts if SequenceMatcher(None,norm(s),norm(title)).ratio()<.72 and len(s)>35),'Die Meldung betrifft eine aktuelle Entwicklung im Themenfeld '+{'handel':'Handel und Handelsmanagement','konsum':'Konsumverhalten und Konsumklima','tech':'Technologie und KI'}[item['category']]+'.')
- return title+' '+second
+from pathlib import Path
 
-def collect(cat):
- records=[];seen=set()
- for q in QUERIES[cat]:
-  for e in fetch(q):
-   date=pubdate(e)
-   if not date or date<START or date>NOW+datetime.timedelta(hours=2):continue
-   title=clean(e.get('title',''))
-   if ' - ' in title: title,src=title.rsplit(' - ',1)
-   else:src=clean(e.get('source',{}).get('title','')) or 'Nachrichtenquelle'
-   if len(title)<24 or any(x in title.lower() for x in EXCLUDE):continue
-   key=norm(title)
-   if key in seen:continue
-   seen.add(key)
-   desc=clean(e.get('summary',''))
-   hits=sum(1 for k in KEYWORDS[cat] if k in (title+' '+desc).lower())
-   if hits<1:continue
-   records.append({'title':title,'source':src,'url':e.get('link',''),'date':date.isoformat(),'description':desc,'category':cat,'hits':hits})
-  time.sleep(.25)
- groups=[]
- for rec in sorted(records,key=lambda r:(-r['hits'],r['date']),reverse=False):
-  tokens=set(norm(rec['title']).split())-{'der','die','das','und','für','mit','bei','von','auf','in','im','ein','eine','zu','des','den','nach','wie','the','and','for','with','from'}
-  best=None;bestscore=0
-  for g in groups:
-   other=g['tokens'];overlap=len(tokens&other)/max(1,min(len(tokens),len(other)))
-   similarity=SequenceMatcher(None,norm(rec['title']),norm(g['items'][0]['title'])).ratio()
-   score=max(overlap,similarity)
-   if score>bestscore:best,bestscore=g,score
-  if best is not None and bestscore>=.68:best['items'].append(rec);best['tokens']|=tokens
-  else:groups.append({'items':[rec],'tokens':tokens})
- output=[]
- for g in groups:
-  items=g['items'];unique=len(set(x['source'].lower() for x in items))
-  primary=max(items,key=lambda x:(x['hits'],x['date']))
-  age=(NOW-datetime.datetime.fromisoformat(primary['date'])).total_seconds()/86400
-  relevance=min(100,round(22+min(28,primary['hits']*7)+min(28,(unique-1)*12)+max(0,18-age*2.5)+min(4,len(items)-1)))
-  output.append({'title':primary['title'],'summary':summarize(primary),'url':primary['url'],'source':primary['source'],'date':primary['date'][:10],'score':relevance,'sources':sorted(set(x['source'] for x in items)),'source_count':unique,'article_count':len(items)})
- output.sort(key=lambda x:(-x['score'],-x['source_count'],x['date']))
- return output[:10],len(records)
-def lead(items):
- if not items:return 'Für diesen Zeitraum konnten keine ausreichend passenden Meldungen ermittelt werden. Bitte später erneut prüfen. Die Quellenabdeckung hängt von öffentlich verfügbaren RSS-Meldungen ab.'
- statements=[]
- for x in items[:3]:statements.append(x['title'].rstrip('.!?')+'.')
- while len(statements)<3:statements.append('Weitere belastbare Entwicklungen konnten im aktuellen Zeitraum nicht eindeutig identifiziert werden.')
- return ' '.join(statements)
-PSYCH=[
- {'title':'Warum Menschen Verluste stärker gewichten als Gewinne','theories':['Prospect Theory (Kahneman & Tversky, 1979)','Endowment Effect (Thaler, 1980)'],'reference':[{'label':'Kahneman & Tversky (1979), Econometrica','url':'https://doi.org/10.2307/1914185'},{'label':'Thaler (1980), Journal of Economic Behavior & Organization','url':'https://doi.org/10.1016/0167-2681(80)90051-7'}], 'sentences':['Kaufentscheidungen beruhen nicht ausschließlich auf dem objektiven Nutzen eines Produkts.','Die Prospect Theory beschreibt, dass Menschen mögliche Ergebnisse relativ zu einem Referenzpunkt bewerten.','Verluste können dabei psychologisch stärker wirken als gleich große Gewinne.','Im Handel kann deshalb eine wegfallende Vergünstigung stärker auffallen als eine gleich hohe zusätzliche Vergünstigung.','Der Endowment Effect ergänzt diese Perspektive durch die häufig höhere Bewertung bereits besessener Güter.','Ein kostenloser Testzeitraum kann das Gefühl von Besitz erzeugen, bevor eine Kaufentscheidung fällt.','Auch die Gestaltung von Rückgabeoptionen kann die wahrgenommene Entscheidungssicherheit beeinflussen.','Die Stärke dieser Effekte hängt allerdings von Kontext, Erfahrung und konkretem Entscheidungsdesign ab.','Für die Handelsforschung bieten sich Experimente an, die identische Angebote mit unterschiedlichen Referenzpunkten vergleichen.','Entscheidend ist dabei, tatsächliches Wahlverhalten zu messen und nicht nur deklarierte Kaufabsichten.']},
- {'title':'Warum die Entscheidungen anderer unser Kaufverhalten beeinflussen','theories':['Social Proof (Cialdini, 1984)','Social Comparison Theory (Festinger, 1954)'],'reference':[{'label':'Festinger (1954), Human Relations','url':'https://doi.org/10.1177/001872675400700202'},{'label':'Cialdini, Influence (Buchinformation)','url':'https://www.harpercollins.com/products/influence-robert-b-cialdini'}], 'sentences':['Menschen orientieren sich bei unsicheren Entscheidungen häufig am Verhalten anderer.','Das Prinzip Social Proof beschreibt die Nutzung sozialer Hinweise als Entscheidungshilfe.','Die Social Comparison Theory erklärt ergänzend, warum Menschen eigene Einschätzungen mit denen anderer vergleichen.','Im Onlinehandel können Bewertungen und sichtbare Nachfrage als solche Hinweise dienen.','Dabei ist die Glaubwürdigkeit der Vergleichsgruppe entscheidend.','Eine hohe Anzahl positiver Rezensionen ersetzt jedoch nicht die Prüfung ihrer Qualität.','Soziale Hinweise können Unsicherheit reduzieren, aber auch Konformität fördern.','Der Effekt hängt unter anderem von Produktkategorie, Involvement und wahrgenommenem Risiko ab.','In Experimenten ließe sich die Wirkung von Bewertungsanzahl und sozialer Ähnlichkeit getrennt untersuchen.','Für Händler ergibt sich daraus die Aufgabe, soziale Information transparent und unverzerrt darzustellen.']}
+import feedparser
+import requests
+
+ROOT = Path(__file__).resolve().parent
+NOW = dt.datetime.now(dt.timezone.utc)
+START = NOW - dt.timedelta(days=7)
+SESSION = requests.Session()
+SESSION.headers.update({'User-Agent': 'RetailIntelligenceMonitor/2.0 (RSS research)'})
+
+SOURCES = {
+    'handel': ['Lebensmittel Zeitung', 'Handelsblatt', 'stores+shops', 'etailment', 'Exciting Commerce', 'TextilWirtschaft', 'EHI Retail Institute', 'Supermarktblog', 'OnlinehändlerNews', 'Retail News', 'HDE'],
+    'konsum': ['NIM', 'NielsenIQ', 'Destatis', 'Eurostat', 'Ipsos', 'YouGov', 'rheingold Institut', 'IFH Köln', 'McKinsey', 'Eurofound', 'GfK', 'Kantar', 'Bitkom', 'EHI Retail Institute', 'Journal of Consumer Research'],
+    'tech': ['heise online', 'THE DECODER', 'MIT Technology Review', 't3n', 'TechCrunch', 'Golem', 'Handelsblatt KI', 'VentureBeat', 'AI News', 'Nature Machine Intelligence'],
+}
+QUERIES = {
+    'handel': ['Einzelhandel Deutschland Strategie Unternehmen', 'Lebensmittelhandel E-Commerce Logistik Handel Deutschland', 'Retail Innovation Filialen Omnichannel Deutschland'],
+    'konsum': [
+        'Konsumverhalten Kaufentscheidungen Verbraucher Studie Deutschland',
+        'Shopper Insights Kaufverhalten Handel Studie',
+        'Markenbindung Markenwechsel Handelsmarken Konsumenten Studie',
+        'Preiswahrnehmung Zahlungsbereitschaft Konsumpsychologie Studie',
+        'Nachhaltigkeit Werte Einstellungen Konsum Forschung',
+        'Customer Experience Einkaufsverhalten Verbraucherbefragung',
+        'Konsumklima Verbrauchervertrauen Kaufkraft Deutschland',
+        'Consumer Behavior Retail Research Europe',
+        'Social Commerce KI Kaufberatung Technologieakzeptanz Studie',
+        'Verhaltensökonomie Kaufentscheidung Konsum Experiment',
+    ],
+    'tech': ['künstliche Intelligenz Unternehmen Agenten Automatisierung', 'AI technology innovation enterprise applications', 'KI Handel Robotik Digitalisierung Technologie'],
+}
+KEYWORDS = {
+    'handel': ['handel', 'retail', 'supermarkt', 'filial', 'e-commerce', 'onlinehandel', 'discounter', 'logistik', 'lieferkette', 'rewe', 'aldi', 'lidl', 'kaufland', 'edeka', 'otto', 'amazon', 'shop', 'lebensmittel'],
+    'konsum': ['konsum', 'verbrauch', 'kaufverhalten', 'kaufkraft', 'konsumklima', 'haushalt', 'verbraucher', 'einkauf', 'preis', 'studie', 'umfrage', 'consumer', 'shopper', 'vertrauen', 'marken', 'forschung', 'befragung', 'experiment', 'customer', 'entscheid', 'nachhaltig', 'zahlung', 'loyal', 'verhalten'],
+    'tech': ['ki', 'künstliche intelligenz', 'artificial intelligence', 'agent', 'robot', 'automatisierung', 'technologie', 'software', 'digital', 'modell', 'llm', 'chip', 'innovation', 'ai ', 'machine learning'],
+}
+EXCLUDE = ['fußball', 'bundesliga', 'promi', 'horoskop', 'rezept', 'sportwetten']
+EVIDENCE = ['studie', 'untersuchung', 'befragung', 'umfrage', 'forschung', 'experiment', 'erhebung', 'analyse', 'survey', 'research', 'report', 'panel', 'daten', 'ergebnis']
+
+# Only preselected literature is cited. Gemini must not invent references.
+TOPICS = [
+    {'title': 'Verlustaversion und Referenzpunkte', 'theories': ['Prospect Theory'], 'reference': [{'label': 'Kahneman & Tversky (1979), Econometrica', 'url': 'https://doi.org/10.2307/1914185'}]},
+    {'title': 'Besitztumseffekt und Wertzuschreibung', 'theories': ['Endowment Effect'], 'reference': [{'label': 'Thaler (1980), Journal of Economic Behavior & Organization', 'url': 'https://doi.org/10.1016/0167-2681(80)90051-7'}]},
+    {'title': 'Sozialer Vergleich und Kaufentscheidungen', 'theories': ['Social Comparison Theory'], 'reference': [{'label': 'Festinger (1954), Human Relations', 'url': 'https://doi.org/10.1177/001872675400700202'}]},
+    {'title': 'Psychologische Grundbedürfnisse und Autonomie', 'theories': ['Self-Determination Theory'], 'reference': [{'label': 'Deci & Ryan (2000), Psychological Inquiry', 'url': 'https://doi.org/10.1207/S15327965PLI1104_01'}]},
+    {'title': 'Einstellungen, soziale Normen und Verhaltenskontrolle', 'theories': ['Theory of Planned Behavior'], 'reference': [{'label': 'Ajzen (1991), Organizational Behavior and Human Decision Processes', 'url': 'https://doi.org/10.1016/0749-5978(91)90020-T'}]},
+    {'title': 'Verfügbarkeitsheuristik und Risikowahrnehmung', 'theories': ['Heuristics and Biases'], 'reference': [{'label': 'Tversky & Kahneman (1974), Science', 'url': 'https://doi.org/10.1126/science.185.4157.1124'}]},
+    {'title': 'Normative Einflüsse und gesellschaftliches Verhalten', 'theories': ['Focus Theory of Normative Conduct'], 'reference': [{'label': 'Cialdini, Reno & Kallgren (1990), Journal of Personality and Social Psychology', 'url': 'https://doi.org/10.1037/0022-3514.58.6.1015'}]},
+    {'title': 'Wahrgenommener Nutzen und Einfachheit digitaler Services', 'theories': ['Technology Acceptance Model'], 'reference': [{'label': 'Davis (1989), MIS Quarterly', 'url': 'https://doi.org/10.2307/249008'}]},
 ]
+
+
+def clean(value):
+    return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', ' ', str(value or '')))).strip()
+
+
+def norm(value):
+    return re.sub(r'\s+', ' ', re.sub(r'[^a-z0-9äöüß ]', ' ', value.lower())).strip()
+
+
+def fetch(query):
+    url = 'https://news.google.com/rss/search?' + urllib.parse.urlencode({'q': query + ' when:7d', 'hl': 'de', 'gl': 'DE', 'ceid': 'DE:de'})
+    try:
+        response = SESSION.get(url, timeout=16)
+        response.raise_for_status()
+        return feedparser.parse(response.content).entries[:65]
+    except Exception as exc:
+        print('RSS Fehler:', query, exc)
+        return []
+
+
+def pubdate(entry):
+    for field in ('published_parsed', 'updated_parsed'):
+        if entry.get(field):
+            try:
+                return dt.datetime.fromtimestamp(calendar.timegm(entry[field]), dt.timezone.utc)
+            except (ValueError, TypeError, OverflowError):
+                pass
+    return None
+
+
+def summarize(item):
+    title = item['title'].rstrip('.!?') + '.'
+    parts = re.split(r'(?<=[.!?])\s+', clean(item.get('description', '')))
+    second = next((p for p in parts if len(p) > 35 and SequenceMatcher(None, norm(p), norm(title)).ratio() < .72), None)
+    if not second:
+        second = 'Die Meldung betrifft eine aktuelle Entwicklung in ' + {'handel': 'Handel und Handelsmanagement', 'konsum': 'Konsumforschung und Verbraucherverhalten', 'tech': 'Technologie und KI'}[item['category']] + '.'
+    return title + ' ' + second
+
+
+def collect(category):
+    records, seen = [], set()
+    for query in QUERIES[category]:
+        for entry in fetch(query):
+            date = pubdate(entry)
+            if not date or not START <= date <= NOW + dt.timedelta(hours=2):
+                continue
+            title = clean(entry.get('title', ''))
+            if ' - ' in title:
+                title, source = title.rsplit(' - ', 1)
+            else:
+                source = clean(entry.get('source', {}).get('title', '')) or 'Nachrichtenquelle'
+            if len(title) < 24 or any(term in title.lower() for term in EXCLUDE):
+                continue
+            key = norm(title)
+            if key in seen:
+                continue
+            seen.add(key)
+            description = clean(entry.get('summary', ''))
+            combined = (title + ' ' + description).lower()
+            hits = sum(1 for term in KEYWORDS[category] if term in combined)
+            if hits < 1:
+                continue
+            evidence = sum(1 for term in EVIDENCE if term in combined)
+            records.append({'title': title, 'source': source, 'url': entry.get('link', ''), 'date': date.isoformat(), 'description': description, 'category': category, 'hits': hits, 'evidence': evidence})
+        time.sleep(.15)
+    groups = []
+    for rec in sorted(records, key=lambda r: (-r['hits'], r['date'])):
+        tokens = set(norm(rec['title']).split()) - {'der', 'die', 'das', 'und', 'für', 'mit', 'bei', 'von', 'auf', 'in', 'im', 'ein', 'eine', 'zu', 'des', 'den', 'nach', 'wie', 'the', 'and', 'for', 'with', 'from'}
+        best, best_score = None, 0
+        for group in groups:
+            overlap = len(tokens & group['tokens']) / max(1, min(len(tokens), len(group['tokens'])))
+            similarity = SequenceMatcher(None, norm(rec['title']), norm(group['items'][0]['title'])).ratio()
+            score = max(overlap, similarity)
+            if score > best_score:
+                best, best_score = group, score
+        if best is not None and best_score >= .68:
+            best['items'].append(rec)
+            best['tokens'] |= tokens
+        else:
+            groups.append({'items': [rec], 'tokens': tokens})
+    output = []
+    for group in groups:
+        items = group['items']
+        unique = len(set(item['source'].lower() for item in items))
+        primary = max(items, key=lambda item: (item['hits'] + (min(item['evidence'], 3) * 2 if category == 'konsum' else 0), item['date']))
+        age = (NOW - dt.datetime.fromisoformat(primary['date'])).total_seconds() / 86400
+        bonus = min(14, primary['evidence'] * 5) if category == 'konsum' else 0
+        relevance = min(100, round(20 + min(26, primary['hits'] * 6) + min(25, (unique - 1) * 11) + max(0, 17 - age * 2.5) + bonus + min(4, len(items) - 1)))
+        output.append({'title': primary['title'], 'summary': summarize(primary), 'url': primary['url'], 'source': primary['source'], 'date': primary['date'][:10], 'score': relevance, 'sources': sorted(set(item['source'] for item in items)), 'source_count': unique, 'article_count': len(items)})
+    output.sort(key=lambda item: (-item['score'], -item['source_count'], item['date']))
+    return output[:10], len(records)
+
+
+def lead(items):
+    if not items:
+        return 'Für diesen Zeitraum wurden keine ausreichend passenden Meldungen gefunden.'
+    return ' '.join(item['title'].rstrip('.!?') + '.' for item in items[:3])
+
+
+def psychology():
+    api_key = os.getenv('GEMINI_API_KEY', '').strip()
+    if not api_key:
+        raise RuntimeError('GEMINI_API_KEY fehlt. Bitte unter GitHub Settings > Secrets and variables > Actions hinterlegen.')
+    from google import genai
+    from google.genai import types
+    from pydantic import BaseModel, Field
+
+    class Article(BaseModel):
+        title: str
+        sentences: list[str] = Field(min_length=10, max_length=10)
+        example: list[str] = Field(min_length=3, max_length=3)
+
+    # Run number changes on every newly started workflow; run attempt changes on rerun.
+    run_number = int(os.getenv('GITHUB_RUN_NUMBER', '1'))
+    run_attempt = int(os.getenv('GITHUB_RUN_ATTEMPT', '1'))
+    topic = TOPICS[(run_number + run_attempt - 2) % len(TOPICS)]
+    prompt = f'''Verfasse auf Deutsch einen neuen wissenschaftlich informierten Kurzbeitrag zum Thema: {topic['title']}.
+Theoretischer Rahmen: {', '.join(topic['theories'])}.
+Zulässige Literaturgrundlage (nur diese Literatur, keine weiteren Studien erfinden): {json.dumps(topic['reference'], ensure_ascii=False)}.
+Verbindliche Anforderungen:
+- Genau 10 eigenständige, grammatikalisch vollständige Sätze im Array "sentences"; zusammen ergeben sie einen gut lesbaren Fließtext ohne Nummerierung.
+- Genau 3 weitere vollständige Sätze im Array "example", die ein konkretes, realistisches Beispiel aus dem Handel oder Konsumalltag darstellen.
+- Prägnante wissenschaftlich korrekte Überschrift im Feld "title".
+- Erläutere Mechanismus, theoretischen Kontext, empirische Einordnung und Grenzen der Übertragbarkeit; keine unbelegten Zahlen, keine erfundenen Experimente oder Zitate.
+- Kein Markdown, keine Aufzählungszeichen, keine Quellenangaben im Fließtext.
+- Ein Satz pro Array-Element, keine Abkürzungen mit Punkten, die die Satzprüfung erschweren.
+- Schreibe eigenständig, nicht als wörtliche Wiedergabe der Quelle.
+Variiere den konkreten Blickwinkel gegenüber anderen Durchläufen. Laufkennung: {run_number}-{run_attempt}.
+'''
+    client = genai.Client(api_key=api_key)
+    try:
+        last_error = None
+        for attempt in range(2):
+            response = client.models.generate_content(
+                model=os.getenv('GEMINI_MODEL', 'gemini-3.8-flash'),
+                contents=prompt + ('\nWICHTIG: Prüfe diesmal vor der Ausgabe die exakte Satzanzahl und vermeide mehrteilige Sätze je Element.' if attempt else ''),
+                config=types.GenerateContentConfig(response_mime_type='application/json', response_schema=Article, temperature=0.65),
+            )
+            try:
+                article = Article.model_validate_json(response.text)
+                if all(len(re.findall(r'[.!?]', text)) == 1 and text.strip()[-1] in '.!?' for text in article.sentences + article.example):
+                    return {'title': article.title, 'theories': topic['theories'], 'reference': topic['reference'], 'sentences': article.sentences, 'example': article.example, 'generated': True}
+                last_error = 'Satzanzahl pro Element nicht korrekt'
+            except Exception as exc:
+                last_error = str(exc)
+        raise RuntimeError('Gemini lieferte nach zwei Versuchen keinen gültigen 10+3-Artikel: ' + str(last_error))
+    finally:
+        client.close()
+
+
 def main():
- data={'updated_at':NOW.isoformat(),'window_start':START.isoformat(),'categories':{},'methodology':'RSS-basierte Recherche mit heuristischem Ranking; Mehrfachberichterstattung wird über Titelähnlichkeit angenähert. Scores und Zusammenfassungen sind keine KI-Validierung. Quellen und Links vor Weiterverwendung prüfen.'}
- for cat in SOURCES:
-  items,count=collect(cat);data['categories'][cat]={'items':items,'lead':lead(items),'candidate_count':count,'preferred_sources':SOURCES[cat]};print(cat,count,len(items))
- data['psychology']=PSYCH[NOW.date().toordinal()%len(PSYCH)]
- (ROOT/'site'/'data.json').write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
-if __name__=='__main__':main()
+    data = {'updated_at': NOW.isoformat(), 'window_start': START.isoformat(), 'categories': {}, 'methodology': 'RSS-Recherche mit heuristischem Ranking und 7-Tage-Fenster. Konsumstudien werden über Signalwörter priorisiert, nicht auf Evidenzqualität geprüft. Psychologieartikel werden mit Gemini aus kuratierter Literatur generiert; fachliche Überprüfung vor wissenschaftlicher Weiterverwendung empfohlen.'}
+    for category in SOURCES:
+        items, count = collect(category)
+        data['categories'][category] = {'items': items, 'lead': lead(items), 'candidate_count': count, 'preferred_sources': SOURCES[category]}
+        print(category, 'Kandidaten:', count, 'Top:', len(items))
+    data['psychology'] = psychology()
+    output = ROOT / 'site' / 'data.json'
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    print('Fertig:', output)
+
+
+if __name__ == '__main__':
+    main()
